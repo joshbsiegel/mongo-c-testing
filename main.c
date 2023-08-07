@@ -4,25 +4,37 @@
 
 static pthread_mutex_t mutex;
 
-static void * threadScramAuth() {
-  mongoc_client_t *client = mongoc_client_new ("mongodb://user,=:pass@127.0.0.1/test?appname=scram-example&authMechanism=SCRAM-SHA-1");
+#define NUM_THREADS 1000
+
+static void * threadScramAuth(void *data) {
+   mongoc_client_pool_t *pool = data;
+   mongoc_client_t *client;
+   bson_t ping = BSON_INITIALIZER;
+   bson_error_t error;
+   bool r;
+
+   BSON_APPEND_INT32 (&ping, "ping", 1);
+
+   client = mongoc_client_pool_pop (pool);
+   r = mongoc_client_command_simple (
+         client, "admin", &ping, NULL, NULL, &error);
+   mongoc_client_pool_push(pool, client);
 }
 
 int main()
 {
+
    mongoc_client_t *client = NULL;
    mongoc_database_t *database = NULL;
-   mongoc_collection_t *collection = NULL;
-   mongoc_cursor_t *cursor = NULL;
+   mongoc_client_pool_t *pool;
    bson_error_t error;
    const char *uri_string = "mongodb://127.0.0.1/";
    mongoc_uri_t *uri = NULL;
    const char *authuristr;
    bson_t roles;
    const bson_t *doc;
-   int exit_code = EXIT_FAILURE;
-   pthread_t threads[10000];
-
+   void *ret;
+   pthread_t threads[NUM_THREADS];
    mongoc_init ();
 
    bson_init (&roles);
@@ -34,13 +46,15 @@ int main()
                "error message:       %s\n",
                uri_string,
                error.message);
-      goto CLEANUP;
+      return EXIT_FAILURE;
    }
 
    client = mongoc_client_new_from_uri (uri);
    if (!client) {
-      goto CLEANUP;
+      return EXIT_FAILURE;
    }
+   
+   mongoc_uri_destroy(uri);
 
    mongoc_client_set_error_api (client, 2);
 
@@ -54,20 +68,34 @@ int main()
 
    mongoc_client_destroy (client);
 
-  
-   for (int i = 0; i < 10000; ++i) {
-        pthread_create(&threads[i], NULL, threadScramAuth, NULL);
+   char * uri_str = bson_strdup_printf("mongodb://user,=:pass@127.0.0.1/test?appname=scram-example&maxPoolSize=%d&authMechanism=SCRAM-SHA-1", NUM_THREADS);
+
+   uri = mongoc_uri_new_with_error (uri_str, &error);
+
+   bson_free(uri_str);
+
+   if (!uri) {
+      fprintf (stderr,
+               "failed to parse URI\n"
+               "error message: %s\n",
+               error.message);
+      return EXIT_FAILURE;
    }
-  
-   CLEANUP:
+   pool = mongoc_client_pool_new (uri);
 
-   bson_destroy (&roles);
+   mongoc_client_pool_set_error_api (pool, 2);
 
-   if (uri) {
-      mongoc_uri_destroy (uri);
+   int64_t before = bson_get_monotonic_time();
+   for (int i = 0; i < NUM_THREADS; ++i) {
+      pthread_create(&threads[i], NULL, threadScramAuth, pool);
    }
 
-   mongoc_cleanup ();
+   for (int i = 0; i < NUM_THREADS; ++i) {
+      pthread_join (threads[i], &ret);
+   }
+   int64_t after = bson_get_monotonic_time();
 
-   return exit_code;
+   printf("total time taken: %"PRId64, after - before);
+
+   return EXIT_SUCCESS;
 }
