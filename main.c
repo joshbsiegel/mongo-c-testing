@@ -3,7 +3,6 @@
 #include <pthread.h>
 
 static pthread_mutex_t mutex;
-static bool in_shutdown = false;
 
 static void * threadScramAuth() {
   mongoc_client_t *client = mongoc_client_new ("mongodb://user,=:pass@127.0.0.1/test?appname=scram-example&authMechanism=SCRAM-SHA-1");
