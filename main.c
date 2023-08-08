@@ -4,7 +4,7 @@
 
 static pthread_mutex_t mutex;
 
-#define NUM_THREADS 1000
+#define NUM_THREADS 5000
 
 static void * threadScramAuth(void *data) {
    mongoc_client_pool_t *pool = data;
@@ -19,6 +19,9 @@ static void * threadScramAuth(void *data) {
    r = mongoc_client_command_simple (
          client, "admin", &ping, NULL, NULL, &error);
    mongoc_client_pool_push(pool, client);
+   
+   bson_destroy (&ping);
+   return NULL;
 }
 
 int main()
@@ -26,13 +29,12 @@ int main()
 
    mongoc_client_t *client = NULL;
    mongoc_database_t *database = NULL;
-   mongoc_client_pool_t *pool;
+   mongoc_client_pool_t *pool = NULL;
    bson_error_t error;
    const char *uri_string = "mongodb://127.0.0.1/";
+   char * scram_uri;
    mongoc_uri_t *uri = NULL;
-   const char *authuristr;
    bson_t roles;
-   const bson_t *doc;
    void *ret;
    pthread_t threads[NUM_THREADS];
    mongoc_init ();
@@ -68,11 +70,11 @@ int main()
 
    mongoc_client_destroy (client);
 
-   char * uri_str = bson_strdup_printf("mongodb://user,=:pass@127.0.0.1/test?appname=scram-example&maxPoolSize=%d&authMechanism=SCRAM-SHA-1", NUM_THREADS);
+   scram_uri = bson_strdup_printf("mongodb://user,=:pass@127.0.0.1/test?appname=scram-example&maxPoolSize=%d&authMechanism=SCRAM-SHA-1", NUM_THREADS);
 
-   uri = mongoc_uri_new_with_error (uri_str, &error);
+   uri = mongoc_uri_new_with_error (scram_uri, &error);
 
-   bson_free(uri_str);
+   bson_free(scram_uri);
 
    if (!uri) {
       fprintf (stderr,
@@ -81,11 +83,17 @@ int main()
                error.message);
       return EXIT_FAILURE;
    }
-   pool = mongoc_client_pool_new (uri);
 
+   pool = mongoc_client_pool_new (uri);
+   if (!pool) {
+      printf("pool failure\n");
+   }
    mongoc_client_pool_set_error_api (pool, 2);
 
    int64_t before = bson_get_monotonic_time();
+
+   printf("started with %d threads \n", NUM_THREADS);
+   
    for (int i = 0; i < NUM_THREADS; ++i) {
       pthread_create(&threads[i], NULL, threadScramAuth, pool);
    }
@@ -93,9 +101,15 @@ int main()
    for (int i = 0; i < NUM_THREADS; ++i) {
       pthread_join (threads[i], &ret);
    }
-   int64_t after = bson_get_monotonic_time();
 
-   printf("total time taken: %"PRId64, after - before);
+   int64_t after = bson_get_monotonic_time();
+  
+   printf("total time taken: %"PRId64 " seconds\n", (after - before)/(1000000));
+
+   bson_destroy (&roles);
+   mongoc_uri_destroy(uri);
+   mongoc_client_pool_destroy(pool);
+   mongoc_cleanup ();
 
    return EXIT_SUCCESS;
 }
